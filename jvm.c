@@ -17,6 +17,9 @@ typedef struct {
     int     usado;
     int     es_string;
     char    str[STR_LEN];   // si es_string
+    int      es_array;
+    int      array_len;
+    int32_t *array_data;
     int32_t campos[MAX_FIELDS];
 } Objeto;
 
@@ -27,6 +30,9 @@ int32_t heap_new() {
         if (!heap[i].usado) {
             heap[i].usado = 1;
             heap[i].es_string = 0;
+            heap[i].es_array = 0;
+            heap[i].array_len = 0;
+            heap[i].array_data = NULL;
             memset(heap[i].campos, 0, sizeof(heap[i].campos));
             heap[i].str[0] = '\0';
             return i;
@@ -39,11 +45,28 @@ int32_t heap_new() {
 int32_t heap_new_string(const char *s) {
     int32_t ref = heap_new();
     if (ref < 0) return -1;
+int32_t heap_new_array(int len) {
+    int32_t ref = heap_new();
+    if (ref < 0) return -1;
+    heap[ref].es_array  = 1;
+    heap[ref].array_len = len;
+    heap[ref].array_data = calloc(len, sizeof(int32_t));
+    return ref;
+}
     heap[ref].es_string = 1;
     strncpy(heap[ref].str, s, STR_LEN-1);
     return ref;
 }
 
+
+int32_t heap_new_array(int len) {
+    int32_t ref = heap_new();
+    if (ref < 0) return -1;
+    heap[ref].es_array   = 1;
+    heap[ref].array_len  = len;
+    heap[ref].array_data = calloc(len, sizeof(int32_t));
+    return ref;
+}
 void    heap_put(int32_t ref, int idx, int32_t val) { heap[ref].campos[idx] = val; }
 int32_t heap_get(int32_t ref, int idx)              { return heap[ref].campos[idx]; }
 
@@ -207,6 +230,15 @@ int32_t ejecutar(int met_idx, int32_t *locals_in, int num_args) {
             case 0x00: break;
 
             // ── Objetos ──────────────────────────────────────────────────────
+            // ── Arrays ──────────────────────────────────────────────────────
+            case 0xbc: { uint8_t t=code[pc++]; int32_t n=lpop(); int32_t r=heap_new_array(n); lpush(r); (void)t; break; }
+            case 0xbd: { pc+=2; int32_t n=lpop(); lpush(heap_new_array(n)); break; }
+            case 0x4f: { int32_t v=lpop(),i=lpop(),r=lpop(); if(r>0&&heap[r].es_array&&i>=0&&i<heap[r].array_len) heap[r].array_data[i]=v; break; }
+            case 0x54: { int32_t v=lpop(),i=lpop(),r=lpop(); if(r>0&&heap[r].es_array&&i>=0&&i<heap[r].array_len) heap[r].array_data[i]=v&0xFF; break; }
+            case 0x2e: { int32_t i=lpop(),r=lpop(); lpush((r>0&&heap[r].es_array&&i>=0&&i<heap[r].array_len)?heap[r].array_data[i]:0); break; }
+            case 0x33: { int32_t i=lpop(),r=lpop(); lpush((r>0&&heap[r].es_array&&i>=0&&i<heap[r].array_len)?(int8_t)heap[r].array_data[i]:0); break; }
+            case 0xbe: { int32_t r=lpop(); lpush((r>0&&heap[r].es_array)?heap[r].array_len:0); break; }
+
             case 0xbb: { pc+=2; int32_t ref=heap_new(); lpush(ref); break; }
 
             case 0xb5: {
