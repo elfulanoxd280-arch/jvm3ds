@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
         fclose(f);
     }
 
+    printf("[JVM] num_metodos=%d\n", num_metodos);
     int main_idx = -1;
     for (int i = 0; i < num_metodos; i++)
         if (strcmp(metodos[i].nombre, "main") == 0) { main_idx=i; break; }
