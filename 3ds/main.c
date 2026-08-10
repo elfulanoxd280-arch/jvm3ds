@@ -43,21 +43,11 @@ int find_method(const char *name){
     return -1;
 }
 
-void jvm_run(int start_mi){
-    ftop = 0;
-    frames[0].code = metodos[start_mi].code;
-    frames[0].len  = metodos[start_mi].code_len;
-    frames[0].pc   = 0;
-    frames[0].lt   = 0;
-    memset(frames[0].loc, 0, sizeof(frames[0].loc));
-    memset(frames[0].ls,  0, sizeof(frames[0].ls));
-
+void jvm_step(){
     while(ftop >= 0){
         Frame *fr = &frames[ftop];
         if(fr->pc >= fr->len){ ftop--; continue; }
-
         uint8_t op = fr->code[fr->pc++];
-
         switch(op){
             case 0x00: break;
             case 0x02: fr->ls[fr->lt++]=-1; break;
@@ -102,67 +92,79 @@ void jvm_run(int start_mi){
             case 0xbb: {fr->pc+=2; fr->ls[fr->lt++]=heap_new(); break;}
             case 0xb5: {
                 uint16_t idx=(fr->code[fr->pc]<<8)|fr->code[fr->pc+1]; fr->pc+=2;
-                int32_t v=fr->ls[--fr->lt], r=fr->ls[--fr->lt];
-                heap_put(r, get_slot(idx), v);
-                break;
-            }
+                int32_t v=fr->ls[--fr->lt],r=fr->ls[--fr->lt];
+                heap_put(r,get_slot(idx),v); break;}
             case 0xb4: {
                 uint16_t idx=(fr->code[fr->pc]<<8)|fr->code[fr->pc+1]; fr->pc+=2;
                 int32_t r=fr->ls[--fr->lt];
-                fr->ls[fr->lt++]=heap_get(r, get_slot(idx));
-                break;
-            }
+                fr->ls[fr->lt++]=heap_get(r,get_slot(idx)); break;}
             case 0xb7: case 0xb6: {
                 uint16_t idx=(fr->code[fr->pc]<<8)|fr->code[fr->pc+1]; fr->pc+=2;
                 const char *mn=cp_get_str(cp_get_a(cp_get_b(idx)));
                 const char *md=cp_get_str(cp_get_b(cp_get_b(idx)));
-                if(strcmp(mn,"println")==0){
-                    int32_t v=fr->ls[--fr->lt]; fr->lt--;
-                    printf("%ld\n",(long)v);
-                    break;
-                }
+                if(strcmp(mn,"println")==0){int32_t v=fr->ls[--fr->lt];fr->lt--;printf("%ld\n",(long)v);break;}
                 int na2=1;
                 for(const char *p=md+1;*p&&*p!=')';p++){
                     if(*p=='L'){while(*p&&*p!=';')p++;na2++;}
                     else if(*p!='[')na2++;
                 }
                 int found=find_method(mn);
-                if(found>=0 && ftop<MAX_FRAMES-1){
-                    int32_t fargs[16]={0};
-                    for(int i=na2-1;i>=0;i--) fargs[i]=fr->ls[--fr->lt];
+                if(found>=0&&ftop<MAX_FRAMES-1){
+                    int32_t fa[16]={0};
+                    for(int i=na2-1;i>=0;i--) fa[i]=fr->ls[--fr->lt];
                     ftop++;
                     Frame *nf=&frames[ftop];
-                    nf->code=metodos[found].code;
-                    nf->len=metodos[found].code_len;
+                    nf->code=metodos[found].code; nf->len=metodos[found].code_len;
                     nf->pc=0; nf->lt=0;
-                    memset(nf->loc,0,sizeof(nf->loc));
-                    memset(nf->ls,0,sizeof(nf->ls));
-                    for(int i=0;i<na2&&i<16;i++) nf->loc[i]=fargs[i];
-                } else {
-                    for(int i=0;i<na2;i++) fr->lt--;
-                }
-                break;
-            }
+                    memset(nf->loc,0,sizeof(nf->loc)); memset(nf->ls,0,sizeof(nf->ls));
+                    for(int i=0;i<na2&&i<16;i++) nf->loc[i]=fa[i];
+                } else { for(int i=0;i<na2;i++) fr->lt--; }
+                break;}
             case 0xb8: {fr->pc+=2; break;}
             case 0xb2: {fr->pc+=2; fr->ls[fr->lt++]=0; break;}
             case 0xba: {fr->pc+=4; break;}
-            case 0x99: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t a=fr->ls[--fr->lt]; if(a==0)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0x9a: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t a=fr->ls[--fr->lt]; if(a!=0)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0x9b: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t a=fr->ls[--fr->lt]; if(a<0)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0x9c: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t a=fr->ls[--fr->lt]; if(a>=0)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0x9d: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t a=fr->ls[--fr->lt]; if(a>0)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0x9e: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t a=fr->ls[--fr->lt]; if(a<=0)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0x9f: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt]; if(a==b)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0xa0: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt]; if(a!=b)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0xa1: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt]; if(a<b)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0xa2: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt]; if(a>=b)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0xa3: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt]; if(a>b)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0xa4: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt]; if(a<=b)fr->pc+=o-1;else fr->pc+=2; break;}
-            case 0xa7: {int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]); fr->pc+=o-1; break;}
+            case 0x99:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t a=fr->ls[--fr->lt];if(a==0)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0x9a:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t a=fr->ls[--fr->lt];if(a!=0)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0x9f:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt];if(a==b)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0xa0:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt];if(a!=b)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0xa1:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt];if(a<b)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0xa2:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt];if(a>=b)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0xa3:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt];if(a>b)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0xa4:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);int32_t b=fr->ls[--fr->lt],a=fr->ls[--fr->lt];if(a<=b)fr->pc+=o-1;else fr->pc+=2;break;}
+            case 0xa7:{int16_t o=(int16_t)((fr->code[fr->pc]<<8)|fr->code[fr->pc+1]);fr->pc+=o-1;break;}
             case 0xb1: case 0xac: case 0xb0: ftop--; break;
             default: ftop--; break;
         }
     }
+}
+
+#define MIDP_UP    1
+#define MIDP_DOWN  2
+#define MIDP_LEFT  4
+#define MIDP_RIGHT 8
+#define MIDP_FIRE  256
+
+int32_t get_midp_keys(){
+    u32 k=hidKeysHeld();
+    int32_t m=0;
+    if(k&KEY_UP)    m|=MIDP_UP;
+    if(k&KEY_DOWN)  m|=MIDP_DOWN;
+    if(k&KEY_LEFT)  m|=MIDP_LEFT;
+    if(k&KEY_RIGHT) m|=MIDP_RIGHT;
+    if(k&KEY_A)     m|=MIDP_FIRE;
+    return m;
+}
+
+void run_method(int mi, int32_t *args, int na){
+    if(mi<0) return;
+    ftop=0;
+    frames[0].code=metodos[mi].code;
+    frames[0].len=metodos[mi].code_len;
+    frames[0].pc=0; frames[0].lt=0;
+    memset(frames[0].loc,0,sizeof(frames[0].loc));
+    memset(frames[0].ls,0,sizeof(frames[0].ls));
+    for(int i=0;i<na&&i<16;i++) frames[0].loc[i]=args[i];
+    jvm_step();
 }
 
 int main(){
@@ -182,11 +184,48 @@ int main(){
     fclose(f);
 
     printf("Metodos: %d\n\n",num_metodos);
-    int mi=find_method("main");
-    if(mi<0){printf("No main\n");goto wait;}
-    printf("Ejecutando...\n\n");
-    jvm_run(mi);
-    printf("\nFin!\n");
+
+    int init_idx=find_method("<init>");
+    int upd_idx=find_method("update");
+    if(init_idx<0){printf("No init\n");goto wait;}
+
+    // Crear objeto Game
+    int32_t game_obj=heap_new();
+
+    // Llamar constructor
+    int32_t iargs[1]={game_obj};
+    run_method(init_idx,iargs,1);
+
+    printf("Game listo!\n");
+    printf("x=%ld y=%ld\n\n",
+        (long)heap_get(game_obj,3),
+        (long)heap_get(game_obj,7));
+    printf("Botones: DPAD\n");
+    printf("START=salir\n\n");
+
+    // Game loop
+    while(aptMainLoop()){
+        hidScanInput();
+        if(hidKeysHeld()&KEY_START) break;
+
+        // Llamar update con keys
+        if(upd_idx>=0){
+            int32_t uargs[2]={game_obj, get_midp_keys()};
+            run_method(upd_idx,uargs,2);
+        }
+
+        // Mostrar estado
+        consoleClear();
+        printf("JVM3DS v0.2\n\n");
+        printf("x = %3ld\n",(long)heap_get(game_obj,3));
+        printf("y = %3ld\n\n",(long)heap_get(game_obj,7));
+        printf("UP/DOWN/LEFT/RIGHT\n");
+        printf("START = salir\n");
+
+        gfxFlushBuffers();
+        gfxSwapBuffers();
+        gspWaitForVBlank();
+    }
 
 wait:
     printf("\nSTART=salir\n");
