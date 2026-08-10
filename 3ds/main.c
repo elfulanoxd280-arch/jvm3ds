@@ -23,6 +23,27 @@ uint8_t  ru8 (FILE *f){uint8_t b;fread(&b,1,1,f);return b;}
 uint16_t ru16(FILE *f){uint8_t b[2];fread(b,1,2,f);return(b[0]<<8)|b[1];}
 uint32_t ru32(FILE *f){uint8_t b[4];fread(b,1,4,f);return(b[0]<<24)|(b[1]<<16)|(b[2]<<8)|b[3];}
 
+// ── Framebuffer ──────────────────────────────────────────────────────────────
+// Pantalla bottom: 320x240, BGR
+static uint8_t cur_r=255, cur_g=255, cur_b=255;
+
+void fb_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b){
+    // Bottom screen: 320 wide, 240 tall, column-major
+    if(x<0||x>=320||y<0||y>=240) return;
+    uint8_t *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
+    int idx = (x * 240 + (239 - y)) * 3;
+    fb[idx+0] = b;
+    fb[idx+1] = g;
+    fb[idx+2] = r;
+}
+
+void fb_fillrect(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b){
+    for(int px=x;px<x+w;px++)
+        for(int py=y;py<y+h;py++)
+            fb_pixel(px,py,r,g,b);
+}
+
+// ── Call stack ───────────────────────────────────────────────────────────────
 #define MAX_FRAMES 8
 typedef struct {
     uint8_t *code;
@@ -102,7 +123,34 @@ void jvm_step(){
                 uint16_t idx=(fr->code[fr->pc]<<8)|fr->code[fr->pc+1]; fr->pc+=2;
                 const char *mn=cp_get_str(cp_get_a(cp_get_b(idx)));
                 const char *md=cp_get_str(cp_get_b(cp_get_b(idx)));
-                if(strcmp(mn,"println")==0){int32_t v=fr->ls[--fr->lt];fr->lt--;printf("%ld\n",(long)v);break;}
+
+                // Interceptar metodos graficos
+                if(strcmp(mn,"setColor")==0){
+                    // args: this, r, g, b
+                    int32_t b2=fr->ls[--fr->lt];
+                    int32_t g2=fr->ls[--fr->lt];
+                    int32_t r2=fr->ls[--fr->lt];
+                    fr->lt--; // this
+                    cur_r=(uint8_t)r2; cur_g=(uint8_t)g2; cur_b=(uint8_t)b2;
+                    break;
+                }
+                if(strcmp(mn,"fillRect")==0){
+                    // args: this, g, x, y, w, h
+                    int32_t h=fr->ls[--fr->lt];
+                    int32_t w=fr->ls[--fr->lt];
+                    int32_t py=fr->ls[--fr->lt];
+                    int32_t px=fr->ls[--fr->lt];
+                    fr->lt--; // g
+                    fr->lt--; // this
+                    fb_fillrect(px,py,w,h,cur_r,cur_g,cur_b);
+                    break;
+                }
+                if(strcmp(mn,"println")==0){
+                    int32_t v=fr->ls[--fr->lt]; fr->lt--;
+                    // print en top screen
+                    break;
+                }
+
                 int na2=1;
                 for(const char *p=md+1;*p&&*p!=')';p++){
                     if(*p=='L'){while(*p&&*p!=';')p++;na2++;}
@@ -142,7 +190,7 @@ void jvm_step(){
 #define MIDP_DOWN  2
 #define MIDP_LEFT  4
 #define MIDP_RIGHT 8
-#define MIDP_FIRE  256
+#define MIDP_FIRE  16
 
 int32_t get_midp_keys(){
     u32 k=hidKeysHeld();
@@ -169,8 +217,10 @@ void run_method(int mi, int32_t *args, int na){
 
 int main(){
     gfxInitDefault();
-    consoleInit(GFX_BOTTOM, NULL);
-    printf("JVM3DS v0.2\n\n");
+    // Top screen para debug, bottom para juego
+    consoleInit(GFX_TOP, NULL);
+
+    printf("JVM3DS v0.3\n\n");
 
     FILE *f=fopen("sdmc:/3ds/Game.class","rb");
     if(!f){printf("ERROR\n");goto wait;}
@@ -183,48 +233,44 @@ int main(){
     cargar_metodos(f);
     fclose(f);
 
-    printf("Metodos: %d\n\n",num_metodos);
+    printf("Metodos: %d\n",num_metodos);
 
-    int init_idx=find_method("<init>");
-    int upd_idx=find_method("update");
-    if(init_idx<0){printf("No init\n");goto wait;}
+    {
+        int init_idx=find_method("<init>");
+        int upd_idx =find_method("update");
+        int drw_idx =find_method("draw");
 
-    // Crear objeto Game
-    int32_t game_obj=heap_new();
+        if(init_idx<0){printf("No init\n");goto wait;}
 
-    // Llamar constructor
-    int32_t iargs[1]={game_obj};
-    run_method(init_idx,iargs,1);
+        int32_t game_obj=heap_new();
+        int32_t iargs[1]={game_obj};
+        run_method(init_idx,iargs,1);
 
-    printf("Game listo!\n");
-    printf("x=%ld y=%ld\n\n",
-        (long)heap_get(game_obj,3),
-        (long)heap_get(game_obj,7));
-    printf("Botones: DPAD\n");
-    printf("START=salir\n\n");
+        printf("Game listo!\n");
+        printf("DPAD=mover A=color\n");
+        printf("START=salir\n");
 
-    // Game loop
-    while(aptMainLoop()){
-        hidScanInput();
-        if(hidKeysHeld()&KEY_START) break;
+        // Objeto Graphics falso = referencia 99
+        int32_t gfx_obj = 99;
 
-        // Llamar update con keys
-        if(upd_idx>=0){
+        while(aptMainLoop()){
+            hidScanInput();
+            if(hidKeysHeld()&KEY_START) break;
+
+            // Update
             int32_t uargs[2]={game_obj, get_midp_keys()};
-            run_method(upd_idx,uargs,2);
+            run_method(upd_idx, uargs, 2);
+
+            // Draw en bottom screen
+            if(drw_idx>=0){
+                int32_t dargs[2]={game_obj, gfx_obj};
+                run_method(drw_idx, dargs, 2);
+            }
+
+            gfxFlushBuffers();
+            gfxSwapBuffers();
+            gspWaitForVBlank();
         }
-
-        // Mostrar estado
-        consoleClear();
-        printf("JVM3DS v0.2\n\n");
-        printf("x = %3ld\n",(long)heap_get(game_obj,3));
-        printf("y = %3ld\n\n",(long)heap_get(game_obj,7));
-        printf("UP/DOWN/LEFT/RIGHT\n");
-        printf("START = salir\n");
-
-        gfxFlushBuffers();
-        gfxSwapBuffers();
-        gspWaitForVBlank();
     }
 
 wait:
