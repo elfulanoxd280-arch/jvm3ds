@@ -37,7 +37,21 @@ void fb_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b){
     fb[idx+2] = r;
 }
 
+void fb_clear(uint8_t r, uint8_t g, uint8_t b){
+    uint8_t *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
+    // Bottom screen: 320x240x3 bytes
+    for(int i=0;i<320*240;i++){
+        fb[i*3+0]=b;
+        fb[i*3+1]=g;
+        fb[i*3+2]=r;
+    }
+}
+
 void fb_fillrect(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b){
+    if(x==0 && y==0 && w>=320 && h>=240){
+        fb_clear(r,g,b);
+        return;
+    }
     for(int px=x;px<x+w;px++)
         for(int py=y;py<y+h;py++)
             fb_pixel(px,py,r,g,b);
@@ -126,12 +140,33 @@ void jvm_step(){
 
                 // Interceptar metodos graficos
                 if(strcmp(mn,"setColor")==0){
-                    // args: this, r, g, b
                     int32_t b2=fr->ls[--fr->lt];
                     int32_t g2=fr->ls[--fr->lt];
                     int32_t r2=fr->ls[--fr->lt];
-                    fr->lt--; // this
+                    fr->lt--;
                     cur_r=(uint8_t)r2; cur_g=(uint8_t)g2; cur_b=(uint8_t)b2;
+                    break;
+                }
+                if(strcmp(mn,"drawString")==0){
+                    // args: this, g, str_ref, px, py
+                    int32_t py2=fr->ls[--fr->lt];
+                    int32_t px2=fr->ls[--fr->lt];
+                    fr->lt--; // str_ref (ignoramos por ahora)
+                    fr->lt--; // g
+                    fr->lt--; // this
+                    // Dibujar posicion como pixel marker
+                    fb_fillrect(px2, py2, 4, 4, cur_r, cur_g, cur_b);
+                    break;
+                }
+                if(strcmp(mn,"drawInt")==0){
+                    // args: this, g, val, px, py
+                    int32_t py2=fr->ls[--fr->lt];
+                    int32_t px2=fr->ls[--fr->lt];
+                    int32_t val=fr->ls[--fr->lt];
+                    fr->lt--; // g
+                    fr->lt--; // this
+                    // Dibujar valor como barrita de pixeles
+                    fb_fillrect(px2, py2, val % 50, 4, cur_r, cur_g, cur_b);
                     break;
                 }
                 if(strcmp(mn,"fillRect")==0){
@@ -283,3 +318,4 @@ wait:
     gfxExit();
     return 0;
 }
+// Esta línea no se agrega - vamos directo a reescribir
